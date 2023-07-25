@@ -1,8 +1,7 @@
-# st
+# st - simple terminal
 
-## keybinds
+it is what you think it is.
 
-|Key  | Description |
-|--|--|
-| `Shift + PageUp/Down` | Scroll Up/Down |
-
+| st |
+|--|
+| ![simple terminal](https://i.imgur.com/NVkhGob.png) |
