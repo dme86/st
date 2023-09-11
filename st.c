@@ -159,11 +159,6 @@ typedef struct {
 	int narg;              /* nb of args */
 } STREscape;
 
-typedef struct {
-	int state;
-	size_t length;
-} URLdfa;
-
 static void execsh(char *, char **);
 static void stty(char **);
 static void sigchld(int);
@@ -213,7 +208,7 @@ static void tdefutf8(char);
 static int32_t tdefcolor(const int *, int *, int);
 static void tdeftran(char);
 static void tstrsequence(uchar);
-static int daddch(URLdfa *, char);
+static const char *findlastany(const char *, const char**, size_t);
 
 static void drawregion(int, int, int, int);
 
@@ -2744,56 +2739,48 @@ redraw(void)
 	draw();
 }
 
-int
-daddch(URLdfa *dfa, char c)
+const char *
+findlastany(const char *str, const char**find, size_t len)
 {
+	const char *found = NULL;
+	int i = 0;
+
+	for (found = str + strlen(str) - 1; found >= str; --found) {
+		for(i = 0; i < len; i++) {
+			if (strncmp(found, find[i], strlen(find[i])) == 0) {
+				return found;
+			}
+		}
+	}
+
+	return NULL;
+}
+
+/*
+** Select and copy the previous url on screen (do nothing if there's no url).
+**
+** FIXME: doesn't handle urls that span multiple lines; will need to add support
+**        for multiline "getsel()" first
+*/
+void
+copyurl(const Arg *arg) {
 	/* () and [] can appear in urls, but excluding them here will reduce false
 	 * positives when figuring out where a given url ends.
 	 */
 	static const char URLCHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 		"abcdefghijklmnopqrstuvwxyz"
 		"0123456789-._~:/?#@!$&'*+,;=%";
-	static const char RPFX[] = "//:sptth";
 
-	if (!strchr(URLCHARS, c)) {
-		dfa->length = 0;
-		dfa->state = 0;
+	static const char* URLSTRINGS[] = {"http://", "https://"};
 
-		return 0;
-	}
-
-	dfa->length++;
-
-	if (dfa->state == 2 && c == '/') {
-		dfa->state = 0;
-	} else if (dfa->state == 3 && c == 'p') {
-		dfa->state++;
-	} else if (c != RPFX[dfa->state]) {
-		dfa->state = 0;
-		return 0;
-	}
-
-	if (dfa->state++ == 7) {
-		dfa->state = 0;
-		return 1;
-	}
-
-	return 0;
-}
-
-/*
-** Select and copy the previous url on screen (do nothing if there's no url).
-*/
-void
-copyurl(const Arg *arg) {
 	int row = 0, /* row of current URL */
 		col = 0, /* column of current URL start */
 		colend = 0, /* column of last occurrence */
 		passes = 0; /* how many rows have been scanned */
 
+	char linestr[term.col + 1];
 	const char *c = NULL,
 		 *match = NULL;
-	URLdfa dfa = { 0 };
 
 	row = (sel.ob.x >= 0 && sel.nb.y > 0) ? sel.nb.y : term.bot;
 	LIMIT(row, term.top, term.bot);
@@ -2809,23 +2796,33 @@ copyurl(const Arg *arg) {
 		/* Read in each column of every row until
 		** we hit previous occurrence of URL
 		*/
-		for (col = colend; col--;)
-			if (daddch(&dfa, term.line[row][col].u < 128 ? term.line[row][col].u : ' '))
-				break;
+		for (col = 0; col < colend; ++col)
+			linestr[col] = term.line[row][col].u < 128 ? term.line[row][col].u : ' ';
+		linestr[col] = '\0';
 
-		if (col >= 0)
+		if ((match = findlastany(linestr, URLSTRINGS,
+						sizeof(URLSTRINGS)/sizeof(URLSTRINGS[0]))))
 			break;
 
-		if (--row < 0)
-			row = term.row - 1;
+        /* .i = 0 --> botton-up
+         * .i = 1 --> top-down
+         * */
+        if (!arg->i) {
+            if (--row < 0)
+                row = term.row - 1;
+        } else {
+            if (++row >= term.row)
+                row = 0;
+        }
 
 		colend = term.col;
-	}
+	};
 
-	if (passes < term.row) {
-		selstart(col, row, 0);
-		selextend((col + dfa.length - 1) % term.col, row + (col + dfa.length - 1) / term.col, SEL_REGULAR, 0);
-		selextend((col + dfa.length - 1) % term.col, row + (col + dfa.length - 1) / term.col, SEL_REGULAR, 1);
+	if (match) {
+		size_t l = strspn(match, URLCHARS);
+		selstart(match - linestr, row, 0);
+		selextend(match - linestr + l - 1, row, SEL_REGULAR, 0);
+		selextend(match - linestr + l - 1, row, SEL_REGULAR, 1);
 		xsetsel(getsel());
 		xclipcopy();
 	}
