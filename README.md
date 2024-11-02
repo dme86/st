@@ -1,13 +1,14 @@
-# simple terminal
+# st - simple terminal
 
-This is my version of the [Suckless Simple Terminal](https://st.suckless.org/), patched to meet my own needs.
+This is my customized version of the [Suckless Simple Terminal](https://st.suckless.org/), tailored to meet my specific requirements.
 
-To install it on Linux with Xserver, simply clone this repository and run 
+To install it on a Linux system with Xserver, please clone this repository and execute the command 
+
 `sudo make install`.
 
-Scrollback is available using Shift + PgUp/PgDn.
+Scrollback functionality can be accessed using `Shift` + `PgUp/PgDn`.
 
 | st |
 |--|
-| ![simple terminal](https://i.imgur.com/NVkhGob.png) |
+| ![](https://i.imgur.com/XnoHRMX.png) |
 
