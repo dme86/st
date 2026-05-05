@@ -36,6 +36,7 @@
 #define STR_BUF_SIZ   ESC_BUF_SIZ
 #define STR_ARG_SIZ   ESC_ARG_SIZ
 #define HISTSIZE      2000
+#define CMDCAPSIZE    (10 * 1024 * 1024)
 
 /* macros */
 #define IS_SET(flag)		((term.mode & (flag)) != 0)
@@ -159,6 +160,14 @@ typedef struct {
 	int narg;              /* nb of args */
 } STREscape;
 
+typedef struct {
+	char *buf;
+	size_t len;
+	size_t cap;
+	int active;
+	int ready;
+} CmdCapture;
+
 static void execsh(char *, char **);
 static void stty(char **);
 static void sigchld(int);
@@ -179,6 +188,11 @@ static void tprinter(char *, size_t);
 static void tdumpsel(void);
 static void tdumpline(int);
 static void tdump(void);
+static void cmdcapstart(void);
+static void cmdcapend(void);
+static void cmdcapappend(const char *, size_t);
+static void cmdcapbackspace(void);
+static void cmdcapcarriagereturn(void);
 static void tclearregion(int, int, int, int);
 static void tcursor(int);
 static void tdeletechar(int);
@@ -231,6 +245,7 @@ static Term term;
 static Selection sel;
 static CSIEscape csiescseq;
 static STREscape strescseq;
+static CmdCapture cmdcap;
 static int iofd = 1;
 static int cmdfd;
 static pid_t pid;
@@ -981,6 +996,86 @@ tsetdirt(int top, int bot)
 
 	for (i = top; i <= bot; i++)
 		term.dirty[i] = 1;
+}
+
+static void
+cmdcapstart(void)
+{
+	cmdcap.len = 0;
+	cmdcap.active = 1;
+	cmdcap.ready = 0;
+	if (cmdcap.buf)
+		cmdcap.buf[0] = '\0';
+}
+
+static void
+cmdcapend(void)
+{
+	cmdcap.active = 0;
+	cmdcap.ready = cmdcap.len > 0;
+}
+
+static void
+cmdcapappend(const char *s, size_t n)
+{
+	size_t cap, need, keep;
+
+	if (!cmdcap.active || IS_SET(MODE_ALTSCREEN) || n == 0)
+		return;
+
+	need = cmdcap.len + n + 1;
+	if (need > CMDCAPSIZE + 1) {
+		keep = CMDCAPSIZE > n ? CMDCAPSIZE - n : 0;
+		if (keep > 0)
+			memmove(cmdcap.buf, cmdcap.buf + cmdcap.len - keep, keep);
+		cmdcap.len = keep;
+		need = cmdcap.len + n + 1;
+	}
+
+	if (need > cmdcap.cap) {
+		for (cap = cmdcap.cap ? cmdcap.cap : BUFSIZ; cap < need; cap *= 2)
+			;
+		if (cap > CMDCAPSIZE + 1)
+			cap = CMDCAPSIZE + 1;
+		cmdcap.buf = xrealloc(cmdcap.buf, cap);
+		cmdcap.cap = cap;
+	}
+
+	memcpy(cmdcap.buf + cmdcap.len, s, n);
+	cmdcap.len += n;
+	cmdcap.buf[cmdcap.len] = '\0';
+}
+
+static void
+cmdcapbackspace(void)
+{
+	if (!cmdcap.active || IS_SET(MODE_ALTSCREEN) || cmdcap.len == 0 ||
+	    cmdcap.buf[cmdcap.len - 1] == '\n')
+		return;
+
+	do {
+		cmdcap.len--;
+	} while (cmdcap.len > 0 && (cmdcap.buf[cmdcap.len] & 0xc0) == 0x80);
+	cmdcap.buf[cmdcap.len] = '\0';
+}
+
+static void
+cmdcapcarriagereturn(void)
+{
+	size_t i;
+
+	if (!cmdcap.active || IS_SET(MODE_ALTSCREEN) || cmdcap.len == 0)
+		return;
+
+	for (i = cmdcap.len; i > 0; i--) {
+		if (cmdcap.buf[i - 1] == '\n') {
+			cmdcap.len = i;
+			cmdcap.buf[cmdcap.len] = '\0';
+			return;
+		}
+	}
+	cmdcap.len = 0;
+	cmdcap.buf[cmdcap.len] = '\0';
 }
 
 void
@@ -1973,6 +2068,14 @@ strhandle(void)
 				}
 			}
 			return;
+		case 777:
+			if (narg > 1) {
+				if (!strcmp(strescseq.args[1], "cmd-start"))
+					cmdcapstart();
+				else if (!strcmp(strescseq.args[1], "cmd-end"))
+					cmdcapend();
+			}
+			return;
 		case 10:
 		case 11:
 		case 12:
@@ -2125,6 +2228,16 @@ printsel(const Arg *arg)
 }
 
 void
+copylastcmd(const Arg *arg)
+{
+	if (!cmdcap.ready || cmdcap.len == 0)
+		return;
+
+	xsetsel(xstrdup(cmdcap.buf));
+	xclipcopy();
+}
+
+void
 tdumpsel(void)
 {
 	char *ptr;
@@ -2239,17 +2352,21 @@ tcontrolcode(uchar ascii)
 {
 	switch (ascii) {
 	case '\t':   /* HT */
+		cmdcapappend("\t", 1);
 		tputtab(1);
 		return;
 	case '\b':   /* BS */
+		cmdcapbackspace();
 		tmoveto(term.c.x-1, term.c.y);
 		return;
 	case '\r':   /* CR */
+		cmdcapcarriagereturn();
 		tmoveto(0, term.c.y);
 		return;
 	case '\f':   /* LF */
 	case '\v':   /* VT */
 	case '\n':   /* LF */
+		cmdcapappend("\n", 1);
 		/* go to first col if the mode is set */
 		tnewline(IS_SET(MODE_CRLF));
 		return;
@@ -2542,6 +2659,7 @@ check_control_code:
 		gp = &term.line[term.c.y][term.c.x];
 	}
 
+	cmdcapappend(c, len);
 	tsetchar(u, &term.c.attr, term.c.x, term.c.y);
 	term.lastc = u;
 
