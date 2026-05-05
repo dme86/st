@@ -166,6 +166,7 @@ typedef struct {
 	size_t cap;
 	int active;
 	int ready;
+	int cr;
 } CmdCapture;
 
 static void execsh(char *, char **);
@@ -193,6 +194,7 @@ static void cmdcapend(void);
 static void cmdcapappend(const char *, size_t);
 static void cmdcapbackspace(void);
 static void cmdcapcarriagereturn(void);
+static void cmdcapflushcarriagereturn(void);
 static void tclearregion(int, int, int, int);
 static void tcursor(int);
 static void tdeletechar(int);
@@ -1004,6 +1006,7 @@ cmdcapstart(void)
 	cmdcap.len = 0;
 	cmdcap.active = 1;
 	cmdcap.ready = 0;
+	cmdcap.cr = 0;
 	if (cmdcap.buf)
 		cmdcap.buf[0] = '\0';
 }
@@ -1022,6 +1025,11 @@ cmdcapappend(const char *s, size_t n)
 
 	if (!cmdcap.active || IS_SET(MODE_ALTSCREEN) || n == 0)
 		return;
+
+	if (cmdcap.cr && n == 1 && s[0] == '\n')
+		cmdcap.cr = 0;
+	else
+		cmdcapflushcarriagereturn();
 
 	need = cmdcap.len + n + 1;
 	if (need > CMDCAPSIZE + 1) {
@@ -1049,6 +1057,8 @@ cmdcapappend(const char *s, size_t n)
 static void
 cmdcapbackspace(void)
 {
+	cmdcapflushcarriagereturn();
+
 	if (!cmdcap.active || IS_SET(MODE_ALTSCREEN) || cmdcap.len == 0 ||
 	    cmdcap.buf[cmdcap.len - 1] == '\n')
 		return;
@@ -1062,9 +1072,22 @@ cmdcapbackspace(void)
 static void
 cmdcapcarriagereturn(void)
 {
+	if (!cmdcap.active || IS_SET(MODE_ALTSCREEN))
+		return;
+
+	cmdcap.cr = 1;
+}
+
+static void
+cmdcapflushcarriagereturn(void)
+{
 	size_t i;
 
-	if (!cmdcap.active || IS_SET(MODE_ALTSCREEN) || cmdcap.len == 0)
+	if (!cmdcap.cr)
+		return;
+
+	cmdcap.cr = 0;
+	if (cmdcap.len == 0)
 		return;
 
 	for (i = cmdcap.len; i > 0; i--) {
